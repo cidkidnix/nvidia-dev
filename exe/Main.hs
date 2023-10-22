@@ -34,10 +34,16 @@ main = do
     gpus <- getNvidiaGPUs
     gpuData <- getGpuData gpus
     let parsedGpuData = parseGpuData gpuData
-    let gpuDeviceNumbers = map (NvidiaDeviceId . either (error "No GPUs found!") (\(x,_) -> x) . TR.decimal . last . T.splitOn "\t ") parsedGpuData
+        modelData = getModelData gpuData
+        gpuDeviceNumbers = map (NvidiaDeviceId . either (error "No GPUs found!") (\(x,_) -> x) . TR.decimal . last . T.splitOn "\t ") parsedGpuData
+        gpuModels = map (last . T.splitOn "\t ") modelData
 
-    putStrLn $ "GPU PCI Ids: " <> show gpus
-    putStrLn $ "GPU Minor Numbers: " <> show gpuDeviceNumbers
+
+    flip mapM_ gpus $ \x -> do
+        putStrLn $ T.unpack $ "GPU Found: " <> (unPCIDevice x)
+
+    flip mapM_ gpuModels $ \x -> do
+        putStrLn $ T.unpack $ "GPU Model: " <> x
 
     createDevices gpuDeviceNumbers devices
 
@@ -60,15 +66,17 @@ getGpuData gpus = flip mapM gpus $ \(PCIDevice x) -> do
 parseGpuData :: [[Text]] -> [Text]
 parseGpuData gpuData = flip concatMap gpuData $ \x -> filter (\c -> "Device Minor" `T.isPrefixOf` c) x
 
+getModelData :: [[Text]] -> [Text]
+getModelData gpuData = flip concatMap gpuData $ \x -> filter (\c -> "Model" `T.isPrefixOf` c) x
+
 createDevices :: [NvidiaDeviceId] -> [NvidiaDevices] -> IO ()
 createDevices devIds devices = void $ flip mapM devices $ \case
-    NvidiaModeset _ -> pure ()
     NvidiaCtl x -> do
-        putStrLn "NVIDIACTL"
+        putStrLn "/dev/nvidiactl"
         exists <- fileExist "/dev/nvidiactl"
         unless exists $ makeNod (textToInt x) 255 "/dev/nvidiactl"
     NvidiaUvm x -> void $ flip mapM devIds $ \deviceId -> do
-        putStrLn "NVIDIA-UVM"
+        putStrLn "/dev/nvidia-uvm and /dev/nvidia-uvm-tools"
         uvmExists <- fileExist "/dev/nvidia-uvm"
         uvmToolsExists <- fileExist "/dev/nvidia-uvm-tools"
 
@@ -77,9 +85,13 @@ createDevices devIds devices = void $ flip mapM devices $ \case
           makeNod (textToInt x) ((unNvidiaDeviceId deviceId) + 1) "/dev/nvidia-uvm-tools"
     Nvidia x -> void $ flip mapM devIds $ \deviceId -> do
         let devId = unNvidiaDeviceId deviceId
-        putStrLn $ "Nvidia" <> show devId
+        putStrLn $ "/dev/nvidia" <> show devId
         exists <- fileExist $ "/dev/nvidia" <> show devId
         unless exists $ makeNod (textToInt x) devId ("/dev/nvidia" <> show devId)
+    NvidiaModeset x -> do
+        putStrLn $ "/dev/nvidia-modeset"
+        exists <- fileExist $ "/dev/nvidia-modeset"
+        unless exists $ makeNod (textToInt x) 254 "/dev/nvidia-modeset"
     _ -> pure ()
 
 data NvidiaDevices
@@ -97,26 +109,6 @@ newtype NvidiaDeviceId = NvidiaDeviceId { unNvidiaDeviceId :: Integer }
 
 newtype PCIDevice = PCIDevice { unPCIDevice :: Text }
   deriving (Show, Eq, Ord)
-
-toNvidiaDeviceText :: NvidiaDevices -> Text
-toNvidiaDeviceText = \case
-  NvidiaModeset _ -> "nvidia-modeset"
-  Nvidia _ -> "nvidia"
-  NvidiaCtl _ -> "nvidiactl"
-  NvidiaUvm _ -> "nvidia-uvm"
-  NvidiaFrontend _ -> "nvidia-frontend"
-  NvidiaCaps _ -> "nvidia-caps"
-  NvidiaNVLink _ -> "nvidia-nvlink"
-
-toNvidiaDeviceNode :: NvidiaDevices -> Maybe FilePath
-toNvidiaDeviceNode = \case
-  NvidiaModeset _ -> Just "/dev/nvidia-modeset"
-  Nvidia _ -> Nothing
-  NvidiaCtl _ -> Just "/dev/nvidiactl"
-  NvidiaUvm _ -> Just "/dev/nvidia-uvm"
-  NvidiaFrontend _ -> Nothing
-  NvidiaCaps _ -> Nothing
-  NvidiaNVLink _ -> Nothing
 
 textToNvidiaDevices :: Text -> Maybe (Text -> NvidiaDevices)
 textToNvidiaDevices = \case
@@ -137,7 +129,10 @@ type Minor = Integer
 
 makeNod :: Major -> Minor -> FilePath -> IO ()
 makeNod maj min' fp = do
-    createDevice fp characterSpecialMode (mkDev maj min')
+    let deviceId = mkDev maj min'
+    putStrLn $ "Making char device " <> fp
+    putStrLn $ "Device ID: " <> show deviceId
+    createDevice fp characterSpecialMode deviceId
     setMode fp
 
 mkDev :: Major -> Minor -> DeviceID
