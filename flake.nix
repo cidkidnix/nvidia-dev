@@ -10,7 +10,7 @@
     in
     {
       packages = nixpkgs.lib.genAttrs supportedSystems (system: let
-        haskellPackages = inputs.nixpkgs.legacyPackages."${system}".haskell.packages.ghc8107;
+        haskellPackages = inputs.nixpkgs.legacyPackages."${system}".haskell.packages.ghc946;
       in {
         default = haskellPackages.callCabal2nix "nvidia-dev" ./. {};
       });
