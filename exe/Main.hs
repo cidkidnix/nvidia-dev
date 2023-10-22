@@ -3,12 +3,13 @@
 module Main where
 
 import System.Posix.Files
+import System.Posix.Types
 import qualified Data.Text as T
 import qualified Data.Text.Read as TR
 import Data.Text (Text)
 import System.Directory
-import System.Process
 import Control.Monad
+import Data.Bits
 
 -- nvidiactl minor is always 255 ???
 -- nvidia-uvm-tools is (minor + 1)_
@@ -65,26 +66,20 @@ createDevices devIds devices = void $ flip mapM devices $ \case
     NvidiaCtl x -> do
         putStrLn "NVIDIACTL"
         exists <- fileExist "/dev/nvidiactl"
-        case exists of
-            True -> pure ()
-            False -> void $ makeNod 666 x "255" "/dev/nvidiactl"
+        unless exists $ makeNod (textToInt x) 255 "/dev/nvidiactl"
     NvidiaUvm x -> void $ flip mapM devIds $ \deviceId -> do
         putStrLn "NVIDIA-UVM"
         uvmExists <- fileExist "/dev/nvidia-uvm"
         uvmToolsExists <- fileExist "/dev/nvidia-uvm-tools"
 
-        case uvmExists || uvmToolsExists of
-          True -> pure ()
-          False -> do
-            makeNod 666 x (T.pack $ show $ unNvidiaDeviceId deviceId) "/dev/nvidia-uvm"
-            makeNod 666 x (T.pack $ show ((unNvidiaDeviceId deviceId) + 1)) "/dev/nvidia-uvm-tools"
+        unless (uvmExists || uvmToolsExists) $ do
+          makeNod (textToInt x) (unNvidiaDeviceId deviceId) "/dev/nvidia-uvm"
+          makeNod (textToInt x) ((unNvidiaDeviceId deviceId) + 1) "/dev/nvidia-uvm-tools"
     Nvidia x -> void $ flip mapM devIds $ \deviceId -> do
-        let devId = T.pack $ show $ unNvidiaDeviceId deviceId
-        putStrLn $ "Nvidia" <> T.unpack devId
-        exists <- fileExist $ "/dev/nvidia" <> T.unpack devId
-        case exists of
-          True -> pure ()
-          False -> makeNod 666 x devId ("/dev/nvidia" <> T.unpack devId)
+        let devId = unNvidiaDeviceId deviceId
+        putStrLn $ "Nvidia" <> show devId
+        exists <- fileExist $ "/dev/nvidia" <> show devId
+        unless exists $ makeNod (textToInt x) devId ("/dev/nvidia" <> show devId)
     _ -> pure ()
 
 
@@ -137,9 +132,19 @@ textToNvidiaDevices = \case
 
 
 type Mode = Integer
-type Major = Text
-type Minor = Text
+type Major = Integer
+type Minor = Integer
 
 
-makeNod :: Mode -> Major -> Minor -> FilePath -> IO ()
-makeNod mode major minor fp = void $ callProcess "mknod" ["-m", show mode, fp, "c", T.unpack major, T.unpack minor]
+makeNod :: Major -> Minor -> FilePath -> IO ()
+makeNod maj min' fp = createDevice fp characterSpecialMode (mkDev maj min')
+
+mkDev :: Major -> Minor -> DeviceID
+mkDev maj min' = fromIntegral $ ((maj .<<. minorbits) .|. min')
+  where
+      minorbits = 8
+
+textToInt :: Text -> Integer
+textToInt a = case TR.decimal a of
+                Left _ -> error "Couldn't parse"
+                Right (i, _) -> i
