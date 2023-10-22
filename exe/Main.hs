@@ -82,7 +82,6 @@ createDevices devIds devices = void $ flip mapM devices $ \case
         unless exists $ makeNod (textToInt x) devId ("/dev/nvidia" <> show devId)
     _ -> pure ()
 
-
 data NvidiaDevices
   = NvidiaModeset Text
   | Nvidia Text
@@ -137,12 +136,24 @@ type Minor = Integer
 
 
 makeNod :: Major -> Minor -> FilePath -> IO ()
-makeNod maj min' fp = createDevice fp characterSpecialMode (mkDev maj min')
+makeNod maj min' fp = do
+    createDevice fp characterSpecialMode (mkDev maj min')
+    setMode fp
 
 mkDev :: Major -> Minor -> DeviceID
 mkDev maj min' = fromIntegral $ ((maj .<<. minorbits) .|. min')
   where
       minorbits = 8
+
+
+-- This might be dangerous, look into
+-- Also do we care about the old special "char" mode,
+-- Seems like we shouldn't and the kernel (or this library) prevents from overwriting
+setMode :: FilePath -> IO ()
+setMode fp = setFileMode fp mode
+  where
+    mode = ownerReadMode .|. ownerWriteMode .|. groupReadMode .|. groupWriteMode .|. otherReadMode .|. otherWriteMode
+
 
 textToInt :: Text -> Integer
 textToInt a = case TR.decimal a of
