@@ -74,24 +74,43 @@ createDevices devIds devices = void $ flip mapM devices $ \case
     NvidiaCtl x -> do
         putStrLn "/dev/nvidiactl"
         exists <- fileExist "/dev/nvidiactl"
-        unless exists $ makeNod (textToInt x) 255 "/dev/nvidiactl"
+        unless exists $ makeChar (textToInt x) 255 "/dev/nvidiactl"
     NvidiaUvm x -> void $ flip mapM devIds $ \deviceId -> do
         putStrLn "/dev/nvidia-uvm and /dev/nvidia-uvm-tools"
         uvmExists <- fileExist "/dev/nvidia-uvm"
         uvmToolsExists <- fileExist "/dev/nvidia-uvm-tools"
 
         unless (uvmExists || uvmToolsExists) $ do
-          makeNod (textToInt x) (unNvidiaDeviceId deviceId) "/dev/nvidia-uvm"
-          makeNod (textToInt x) ((unNvidiaDeviceId deviceId) + 1) "/dev/nvidia-uvm-tools"
+          makeChar (textToInt x) (unNvidiaDeviceId deviceId) "/dev/nvidia-uvm"
+          makeChar (textToInt x) ((unNvidiaDeviceId deviceId) + 1) "/dev/nvidia-uvm-tools"
     Nvidia x -> void $ flip mapM devIds $ \deviceId -> do
         let devId = unNvidiaDeviceId deviceId
         putStrLn $ "/dev/nvidia" <> show devId
         exists <- fileExist $ "/dev/nvidia" <> show devId
-        unless exists $ makeNod (textToInt x) devId ("/dev/nvidia" <> show devId)
+        unless exists $ makeChar (textToInt x) devId ("/dev/nvidia" <> show devId)
     NvidiaModeset x -> do
         putStrLn $ "/dev/nvidia-modeset"
         exists <- fileExist $ "/dev/nvidia-modeset"
-        unless exists $ makeNod (textToInt x) 254 "/dev/nvidia-modeset"
+        unless exists $ makeChar (textToInt x) 254 "/dev/nvidia-modeset"
+
+    NvidiaCaps x -> do
+        putStrLn $ "/dev/nvidia-caps"
+        exists <- fileExist "/dev/nvidia-caps"
+        unless exists $ do
+          -- More stuff lives here on workstation gpus
+          createDirectory "/dev/nvidia-caps"
+          setFileMode "/dev/nvidia-caps" $ ownerModes .|. groupReadMode .|. groupExecuteMode .|. otherReadMode .|. otherExecuteMode
+
+          let cap1 = mkDev (textToInt x) 1
+              cap2 = mkDev (textToInt x) 2
+
+          createDevice "/dev/nvidia-caps/nvidia-cap1" characterSpecialMode cap1
+          createDevice "/dev/nvidia-caps/nvidia-cap2" characterSpecialMode cap2
+
+          -- These don't have 666 for some reason
+          setFileMode "/dev/nvidia-caps/nvidia-cap1" ownerReadMode
+          setFileMode "/dev/nvidia-caps/nvidia-cap2" $  ownerReadMode .|. groupReadMode .|. otherReadMode
+
     _ -> pure ()
 
 data NvidiaDevices
@@ -127,13 +146,13 @@ type Major = Integer
 type Minor = Integer
 
 
-makeNod :: Major -> Minor -> FilePath -> IO ()
-makeNod maj min' fp = do
+makeChar :: Major -> Minor -> FilePath -> IO ()
+makeChar maj min' fp = do
     let deviceId = mkDev maj min'
     putStrLn $ "Making char device " <> fp
     putStrLn $ "Device ID: " <> show deviceId
     createDevice fp characterSpecialMode deviceId
-    setMode fp
+    setCharMode fp
 
 mkDev :: Major -> Minor -> DeviceID
 mkDev maj min' = fromIntegral $ ((maj .<<. minorbits) .|. min')
@@ -144,11 +163,10 @@ mkDev maj min' = fromIntegral $ ((maj .<<. minorbits) .|. min')
 -- This might be dangerous, look into
 -- Also do we care about the old special "char" mode,
 -- Seems like we shouldn't and the kernel (or this library) prevents from overwriting
-setMode :: FilePath -> IO ()
-setMode fp = setFileMode fp mode
+setCharMode :: FilePath -> IO ()
+setCharMode fp = setFileMode fp mode
   where
     mode = ownerReadMode .|. ownerWriteMode .|. groupReadMode .|. groupWriteMode .|. otherReadMode .|. otherWriteMode
-
 
 textToInt :: Text -> Integer
 textToInt a = case TR.decimal a of
